@@ -1,7 +1,8 @@
 #include <Arduino.h>
 
 #include <WiFi.h>
-#include <PubSubClient.h> // doc de PubSubClient https://pubsubclient.knolleary.net/api#callback
+#include <PubSubClient.h> 
+
 
 #define TIMER_INTERRUPT_DEBUG  3
 #include "ESP32TimerInterrupt.h"
@@ -21,13 +22,15 @@ ESP32Timer ITimer2(2);
 ESP32Timer ITimer3(3);
 volatile int interruptCounter;
 portMUX_TYPE crossMux = portMUX_INITIALIZER_UNLOCKED;
-const int syncPin = 23;
-const int thyristorPin = 21; //reactor
-const int pinDimmer2 = 22;   //tolva
+const int syncPin = 19;
+const int thyristorPin = 18; //reactor
+const int pinDimmer2 = 5;   //tolva
 volatile int valor  = 7650; //6 voltios //7700 da dos voltios
 volatile int valor2 = 7650;
 volatile int pot_res=0;   //valor para variar la pontencia de la resistencia de la tolva
 volatile int pot_res2=0;  //valor para varia la potencia de la resistencia del reactor
+volatile int mssparo =0;
+bool inicio = false;
 
 void IRAM_ATTR gate2_off(void){
   digitalWrite(thyristorPin ,LOW); 
@@ -53,9 +56,11 @@ void IRAM_ATTR gate_pulse(void){
 void IRAM_ATTR fnc_cruce(){
    portENTER_CRITICAL_ISR(&crossMux);
    interruptCounter++;
-   //ITimer1.attachInterruptInterval(vlr,gate_pulse);
    portEXIT_CRITICAL_ISR(&crossMux);
   }
+void on_message(char* topic, byte* payload, unsigned int length);
+void reconnect();
+void setup_wifi();
 
 void setup() {
   Serial.begin(115200);
@@ -68,35 +73,41 @@ void setup() {
   //attachInterrupt(digitalPinToInterrupt(syncPin),fnc_cruce,FALLING)
   }
 
-bool in = false;
+
 void loop() {
   // put your main code here, to run repeatedly:
-  if(!client.connected()){
-     reconnect();
-     //in = true;
-    }
-    
+  if(!client.connected()){    
+    valor2 = 7650;
+    valor = 7650;
+    reconnect();
+  }
   if(client.connected()){
-    valor2 = map(pot_res2,0,100,7650,50);
-    valor = map(pot_res,0,100,7650,50);
-    if (interruptCounter > 0){
-    portENTER_CRITICAL(&crossMux);
-    ITimer1.attachInterruptInterval(valor2,gate2_pulse); //para el reactor
-    ITimer0.attachInterruptInterval(valor,gate_pulse);  //para la tolva
-    interruptCounter--;
-    portEXIT_CRITICAL(&crossMux);
+    if(mssparo == 2){
+      //Serial.print("Paro ON-------------");
+      valor2 = 7650;
+      valor = 7650;
+    }else{
+      //Serial.print("Paro OFF -------------");
+      valor2 = map(pot_res2,0,100,7650,50);
+      valor = map(pot_res,0,100,7650,50);
     }
-    
-    if (in == false){
+    if (interruptCounter > 0){
+      portENTER_CRITICAL(&crossMux);
+      ITimer1.attachInterruptInterval(valor2,gate2_pulse); //para el reactor
+      ITimer0.attachInterruptInterval(valor,gate_pulse);  //para la tolva
+      interruptCounter--;
+      portEXIT_CRITICAL(&crossMux);
+    }
+    if (inicio == false){
       Serial.println("Se activa la interrupcion");
       digitalWrite(syncPin, LOW);
       attachInterrupt(digitalPinToInterrupt(syncPin),fnc_cruce,FALLING);
-      in=true;
-      }
-    //Serial.print(pot_res);
-    //Serial.print(",");
-    //Serial.println(pot_res2);
-   }
+      inicio=true;
+    }
+  }
+  //Serial.print(valor2);
+  //Serial.print(":");
+  //Serial.println(valor);
   client.loop(); 
 }
 
@@ -130,7 +141,7 @@ void reconnect(){
       //client.subscribe("planta/tolva/val_Pro");
       client.subscribe("planta/tolva/res_elec");
       client.subscribe("planta/reactor/resi_elec");
-      //client.subscribe("planta/reactor/motor");
+      client.subscribe("planta/Stop");
       //client.subscribe("planta/reactor/val_alv");
     } else {
       Serial.print("failed with state");
@@ -156,5 +167,10 @@ void on_message(char* topic, byte* payload, unsigned int leng){
     //Serial.print(topic);
     pot_res2 = atoi(incoming.c_str());
     //Serial.println(" Mensaje ->" + incoming);
+   }
+   if (String(topic) == "planta/Stop"){
+    Serial.print(topic);
+    mssparo = atoi(incoming.c_str());
+    Serial.println(" Mensaje ->" + incoming);
    }
   }
